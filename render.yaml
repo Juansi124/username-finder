@@ -1,0 +1,13 @@
+services:
+  - type: worker
+    name: discord-username-finder
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: DELAY_SECONDS
+        value: "2"
