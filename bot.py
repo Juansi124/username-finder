@@ -42,13 +42,13 @@ async def check_with_retry(session, name):
         return second
     return False
 
-@tasks.loop(seconds=5)
+@tasks.loop(seconds=3)
 async def generate_and_post():
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
         return
 
-    names = [random_name() for _ in range(10)]
+    names = [random_name() for _ in range(5)]
     async with aiohttp.ClientSession() as session:
         results = await asyncio.gather(*[check_with_retry(session, n) for n in names])
 
@@ -71,7 +71,7 @@ async def on_ready():
     if channel:
         await channel.send(embed=discord.Embed(
             title="🔍 Username Checker iniciado",
-            description="Chequeando 10 nombres a la vez con verificación doble ✅",
+            description="Chequeando 5 nombres a la vez cada 3s ✅",
             color=0x5865F2,
         ))
     generate_and_post.start()
