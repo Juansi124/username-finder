@@ -15,6 +15,7 @@ client = discord.Client(intents=intents)
 CHARS = string.ascii_lowercase + string.digits
 generated = set()
 session: aiohttp.ClientSession = None
+rate_limited_until: float = 0
 
 def random_name(length=4) -> str:
     while True:
@@ -24,13 +25,14 @@ def random_name(length=4) -> str:
             return name
 
 async def check_one(name: str) -> bool:
+    global rate_limited_until
     url = "https://discord.com/api/v9/unique-username/username-attempt-unauthed"
     try:
         async with session.post(url, json={"username": name}, timeout=aiohttp.ClientTimeout(total=8)) as r:
             if r.status == 429:
-                retry_after = float(r.headers.get("Retry-After", 5))
-                print(f"[!] Rate limited. Esperando {retry_after}s...")
-                await asyncio.sleep(retry_after)
+                retry_after = float(r.headers.get("Retry-After", 60))
+                rate_limited_until = asyncio.get_event_loop().time() + retry_after
+                print(f"[!] Rate limited. Pausando {retry_after}s...")
                 return False
             if r.status != 200:
                 return False
@@ -40,21 +42,25 @@ async def check_one(name: str) -> bool:
         print(f"[ERR] {name}: {e}")
         return False
 
-async def check_batch(batch_size=20):
-    names = [random_name() for _ in range(batch_size)]
-    results = await asyncio.gather(*[check_one(n) for n in names])
-    return list(zip(names, results))
-
-@tasks.loop(seconds=2)
+@tasks.loop(seconds=15)  # Más lento para no quemar la IP
 async def generate_and_post():
+    global rate_limited_until
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
         return
 
-    results = await check_batch(batch_size=20)
-    available_found = []
+    # Si estamos en rate limit, esperar
+    now = asyncio.get_event_loop().time()
+    if now < rate_limited_until:
+        wait = int(rate_limited_until - now)
+        print(f"[~] En rate limit, faltan {wait}s...")
+        return
 
-    for name, available in results:
+    names = [random_name() for _ in range(5)]  # Menos por ciclo, más sostenible
+    results = await asyncio.gather(*[check_one(n) for n in names])
+
+    available_found = []
+    for name, available in zip(names, results):
         if available:
             available_found.append(name)
             print(f"[✓] DISPONIBLE: {name}")
@@ -78,18 +84,6 @@ async def on_ready():
     global session
     session = aiohttp.ClientSession()
     print(f"[BOT] Online as {client.user}")
-    channel = client.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send(embed=discord.Embed(
-            title="🔍 Username Checker iniciado",
-            description="Chequeando **20 nombres por ciclo** cada 2 segundos 🚀",
-            color=0x5865F2,
-        ))
     generate_and_post.start()
-
-@client.event
-async def on_disconnect():
-    if session:
-        await session.close()
 
 client.run(TOKEN)
