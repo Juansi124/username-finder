@@ -28,17 +28,25 @@ async def check_one(session, name):
         async with session.post(url, json={"username": name}, timeout=aiohttp.ClientTimeout(total=5)) as r:
             if r.status == 429:
                 await asyncio.sleep(10)
-                return name, False
+                return False
             data = await r.json()
-            return name, data.get("taken") == False
+            return data.get("taken") == False
     except:
-        return name, False
+        return False
+
+async def check_with_retry(name):
+    async with aiohttp.ClientSession() as session:
+        first = await check_one(session, name)
+        if first:
+            await asyncio.sleep(1)
+            second = await check_one(session, name)
+            return second
+        return False
 
 async def check_batch():
     names = [random_name() for _ in range(5)]
-    async with aiohttp.ClientSession() as session:
-        results = await asyncio.gather(*[check_one(session, n) for n in names])
-    return results
+    results = await asyncio.gather(*[check_with_retry(n) for n in names])
+    return list(zip(names, results))
 
 @tasks.loop(seconds=3)
 async def generate_and_post():
@@ -66,7 +74,7 @@ async def on_ready():
     if channel:
         await channel.send(embed=discord.Embed(
             title="🔍 Username Checker iniciado",
-            description="Chequeando 5 nombres a la vez...",
+            description="Chequeando 5 nombres a la vez con verificación doble ✅",
             color=0x5865F2,
         ))
     generate_and_post.start()
