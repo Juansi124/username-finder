@@ -14,69 +14,82 @@ client = discord.Client(intents=intents)
 
 CHARS = string.ascii_lowercase + string.digits
 generated = set()
+session: aiohttp.ClientSession = None
 
-def random_name() -> str:
+def random_name(length=4) -> str:
     while True:
-        name = "".join(random.choices(CHARS, k=4))
+        name = "".join(random.choices(CHARS, k=length))
         if name not in generated:
             generated.add(name)
             return name
 
-async def check_one(session, name):
+async def check_one(name: str) -> bool:
     url = "https://discord.com/api/v9/unique-username/username-attempt-unauthed"
     try:
-        async with session.post(url, json={"username": name}, timeout=aiohttp.ClientTimeout(total=5)) as r:
+        async with session.post(url, json={"username": name}, timeout=aiohttp.ClientTimeout(total=8)) as r:
             if r.status == 429:
-                await asyncio.sleep(10)
+                retry_after = float(r.headers.get("Retry-After", 5))
+                print(f"[!] Rate limited. Esperando {retry_after}s...")
+                await asyncio.sleep(retry_after)
+                return False
+            if r.status != 200:
                 return False
             data = await r.json()
             return data.get("taken") == False
-    except:
+    except Exception as e:
+        print(f"[ERR] {name}: {e}")
         return False
 
-async def check_with_retry(name):
-    async with aiohttp.ClientSession() as session:
-        first = await check_one(session, name)
-        if first:
-            await asyncio.sleep(1)
-            second = await check_one(session, name)
-            return second
-        return False
-
-async def check_batch():
-    names = [random_name() for _ in range(5)]
-    results = await asyncio.gather(*[check_with_retry(n) for n in names])
+async def check_batch(batch_size=20):
+    names = [random_name() for _ in range(batch_size)]
+    results = await asyncio.gather(*[check_one(n) for n in names])
     return list(zip(names, results))
 
-@tasks.loop(seconds=3)
+@tasks.loop(seconds=2)
 async def generate_and_post():
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
         return
 
-    results = await check_batch()
+    results = await check_batch(batch_size=20)
+    available_found = []
+
     for name, available in results:
         if available:
-            embed = discord.Embed(
-                description=f"**`{name}`** is available ✅",
-                color=0x57F287,
-            )
-            embed.set_footer(text=f"Checked: {len(generated)}")
-            await channel.send(embed=embed)
-            print(f"[✓] Available: {name}")
+            available_found.append(name)
+            print(f"[✓] DISPONIBLE: {name}")
         else:
-            print(f"[✗] Taken: {name}")
+            print(f"[✗] Tomado: {name}")
+
+    if available_found:
+        description = "\n".join([f"**`{n}`** ✅" for n in available_found])
+        embed = discord.Embed(
+            title="🎉 Usernames disponibles",
+            description=description,
+            color=0x57F287,
+        )
+        embed.set_footer(text=f"Total chequeados: {len(generated)}")
+        await channel.send(embed=embed)
+
+    print(f"[~] Total chequeados: {len(generated)}")
 
 @client.event
 async def on_ready():
+    global session
+    session = aiohttp.ClientSession()
     print(f"[BOT] Online as {client.user}")
     channel = client.get_channel(CHANNEL_ID)
     if channel:
         await channel.send(embed=discord.Embed(
             title="🔍 Username Checker iniciado",
-            description="Chequeando 5 nombres a la vez con verificación doble ✅",
+            description="Chequeando **20 nombres por ciclo** cada 2 segundos 🚀",
             color=0x5865F2,
         ))
     generate_and_post.start()
+
+@client.event
+async def on_disconnect():
+    if session:
+        await session.close()
 
 client.run(TOKEN)
