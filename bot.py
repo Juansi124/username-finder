@@ -3,87 +3,68 @@ import asyncio
 import random
 import string
 import os
+import aiohttp
 from discord.ext import tasks
 
-# ── Config ──────────────────────────────────────────────────────────────────
 TOKEN = os.environ.get("DISCORD_TOKEN")
 CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "0"))
-DELAY_SECONDS = float(os.environ.get("DELAY_SECONDS", "2"))  # entre cada nombre
-# ────────────────────────────────────────────────────────────────────────────
+DELAY_SECONDS = float(os.environ.get("DELAY_SECONDS", "3"))
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
 
-LETTERS = string.ascii_lowercase
-generated = set()  # evitar repetir nombres
+CHARS = string.ascii_lowercase + string.digits
+generated = set()
 
-
-def random_4_letter_name() -> str:
-    """Genera un username aleatorio de 4 letras (a-z)."""
+def random_name() -> str:
     while True:
-        name = "".join(random.choices(LETTERS, k=4))
+        name = "".join(random.choices(CHARS, k=4))
         if name not in generated:
             generated.add(name)
             return name
 
-
-def is_potentially_available(name: str) -> bool:
-    """
-    Heurística simple: marca como 'disponible para revisar' si el nombre
-    tiene una combinación interesante (no es spam de consonantes difíciles,
-    tiene vocales, etc.).
-    
-    Puedes ajustar estas reglas a tu gusto.
-    """
-    vowels = set("aeiou")
-    has_vowel = any(c in vowels for c in name)
-    
-    # Filtros de calidad — ajusta a tu gusto
-    hard_clusters = ["xkq", "qqq", "zzz", "xxx", "www"]
-    has_hard_cluster = any(h in name for h in hard_clusters)
-    
-    # Consideramos "disponible para revisar" si tiene al menos una vocal
-    # y no tiene clusters muy feos
-    return has_vowel and not has_hard_cluster
-
+async def check_discord_available(name: str) -> bool:
+    url = f"https://discord.com/api/v9/unique-username/username-attempt-unauthed"
+    payload = {"username": name}
+    headers = {"Content-Type": "application/json"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                data = await r.json()
+                return data.get("taken") == False
+    except:
+        return False
 
 @tasks.loop(seconds=DELAY_SECONDS)
 async def generate_and_post():
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
-        print(f"[ERROR] No se encontró el canal con ID {CHANNEL_ID}")
         return
 
-    name = random_4_letter_name()
+    name = random_name()
+    available = await check_discord_available(name)
 
-    if is_potentially_available(name):
+    if available:
         embed = discord.Embed(
-            description=f"**`{name}`** podría estar disponible — revísalo en Discord",
-            color=0x57F287,  # verde Discord
+            description=f"**`{name}`** is available ✅",
+            color=0x57F287,
         )
-        embed.set_footer(text=f"Generados hasta ahora: {len(generated)}")
+        embed.set_footer(text=f"Checked: {len(generated)}")
         await channel.send(embed=embed)
-        print(f"[✓] Publicado: {name}")
+        print(f"[✓] Available: {name}")
     else:
-        print(f"[–] Saltado:   {name}")
-
+        print(f"[✗] Taken: {name}")
 
 @client.event
 async def on_ready():
-    print(f"[BOT] Conectado como {client.user}")
+    print(f"[BOT] Online as {client.user}")
     channel = client.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send(
-            embed=discord.Embed(
-                title="🔍 Username Finder iniciado",
-                description=(
-                    "Buscando nombres de 4 letras interesantes...\n"
-                    "Cuando aparezca uno, revísalo manualmente en Discord para ver si está libre."
-                ),
-                color=0x5865F2,
-            )
-        )
+        await channel.send(embed=discord.Embed(
+            title="🔍 Username Checker iniciado",
+            description="Buscando usernames de 4 caracteres disponibles...",
+            color=0x5865F2,
+        ))
     generate_and_post.start()
-
 
 client.run(TOKEN)
