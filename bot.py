@@ -8,7 +8,6 @@ from discord.ext import tasks
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
 CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "0"))
-DELAY_SECONDS = float(os.environ.get("DELAY_SECONDS", "3"))
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -23,37 +22,42 @@ def random_name() -> str:
             generated.add(name)
             return name
 
-async def check_discord_available(name: str) -> bool:
-    url = f"https://discord.com/api/v9/unique-username/username-attempt-unauthed"
-    payload = {"username": name}
-    headers = {"Content-Type": "application/json"}
+async def check_one(session, name):
+    url = "https://discord.com/api/v9/unique-username/username-attempt-unauthed"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as r:
-                data = await r.json()
-                return data.get("taken") == False
+        async with session.post(url, json={"username": name}, timeout=aiohttp.ClientTimeout(total=5)) as r:
+            if r.status == 429:
+                await asyncio.sleep(10)
+                return name, False
+            data = await r.json()
+            return name, data.get("taken") == False
     except:
-        return False
+        return name, False
 
-@tasks.loop(seconds=DELAY_SECONDS)
+async def check_batch():
+    names = [random_name() for _ in range(5)]
+    async with aiohttp.ClientSession() as session:
+        results = await asyncio.gather(*[check_one(session, n) for n in names])
+    return results
+
+@tasks.loop(seconds=3)
 async def generate_and_post():
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
         return
 
-    name = random_name()
-    available = await check_discord_available(name)
-
-    if available:
-        embed = discord.Embed(
-            description=f"**`{name}`** is available ✅",
-            color=0x57F287,
-        )
-        embed.set_footer(text=f"Checked: {len(generated)}")
-        await channel.send(embed=embed)
-        print(f"[✓] Available: {name}")
-    else:
-        print(f"[✗] Taken: {name}")
+    results = await check_batch()
+    for name, available in results:
+        if available:
+            embed = discord.Embed(
+                description=f"**`{name}`** is available ✅",
+                color=0x57F287,
+            )
+            embed.set_footer(text=f"Checked: {len(generated)}")
+            await channel.send(embed=embed)
+            print(f"[✓] Available: {name}")
+        else:
+            print(f"[✗] Taken: {name}")
 
 @client.event
 async def on_ready():
@@ -62,7 +66,7 @@ async def on_ready():
     if channel:
         await channel.send(embed=discord.Embed(
             title="🔍 Username Checker iniciado",
-            description="Buscando usernames de 4 caracteres disponibles...",
+            description="Chequeando 5 nombres a la vez...",
             color=0x5865F2,
         ))
     generate_and_post.start()
