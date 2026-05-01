@@ -27,12 +27,26 @@ async def check_one(session, name):
     try:
         async with session.post(url, json={"username": name}, timeout=aiohttp.ClientTimeout(total=5)) as r:
             if r.status == 429:
-                await asyncio.sleep(15)
+                await asyncio.sleep(10)
                 return False
             data = await r.json()
             return data.get("taken") == False
     except:
         return False
+
+async def check_with_retry(name):
+    async with aiohttp.ClientSession() as session:
+        first = await check_one(session, name)
+        if first:
+            await asyncio.sleep(1)
+            second = await check_one(session, name)
+            return second
+        return False
+
+async def check_batch():
+    names = [random_name() for _ in range(5)]
+    results = await asyncio.gather(*[check_with_retry(n) for n in names])
+    return list(zip(names, results))
 
 @tasks.loop(seconds=3)
 async def generate_and_post():
@@ -40,11 +54,8 @@ async def generate_and_post():
     if channel is None:
         return
 
-    names = [random_name() for _ in range(5)]
-    async with aiohttp.ClientSession() as session:
-        results = await asyncio.gather(*[check_one(session, n) for n in names])
-
-    for name, available in zip(names, results):
+    results = await check_batch()
+    for name, available in results:
         if available:
             embed = discord.Embed(
                 description=f"**`{name}`** is available ✅",
@@ -63,7 +74,7 @@ async def on_ready():
     if channel:
         await channel.send(embed=discord.Embed(
             title="🔍 Username Checker iniciado",
-            description="Chequeando 5 nombres cada 3s 🚀",
+            description="Chequeando 5 nombres a la vez con verificación doble ✅",
             color=0x5865F2,
         ))
     generate_and_post.start()
