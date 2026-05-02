@@ -1,117 +1,70 @@
+import discord
 import asyncio
 import random
 import string
 import os
 import aiohttp
-import itertools
+from discord.ext import tasks
 
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-LENGTH = int(os.environ.get("LENGTH", "4"))
-THREADS = int(os.environ.get("THREADS", "20"))
-DELAY = float(os.environ.get("DELAY", "0.5"))
-PROXIES_ENV = os.environ.get("PROXIES", "")
+TOKEN = os.environ.get("DISCORD_TOKEN")
+CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "0"))
+DELAY_SECONDS = float(os.environ.get("DELAY_SECONDS", "3"))
+
+intents = discord.Intents.default()
+client = discord.Client(intents=intents)
 
 CHARS = string.ascii_lowercase + string.digits
 generated = set()
-checked = 0
-found = 0
-
-# Cargar proxies
-if PROXIES_ENV:
-    proxy_list = [p.strip() for p in PROXIES_ENV.split(",") if p.strip()]
-else:
-    proxy_list = []
-
-proxy_cycle = itertools.cycle(proxy_list) if proxy_list else None
-
-def get_proxy():
-    if proxy_cycle is None:
-        return None, None
-    raw = next(proxy_cycle)
-    # formato: user:pass@host:port
-    if "@" in raw:
-        auth, hostport = raw.rsplit("@", 1)
-        user, password = auth.split(":", 1)
-        proxy_url = f"http://{hostport}"
-        proxy_auth = aiohttp.BasicAuth(user, password)
-        return proxy_url, proxy_auth
-    else:
-        return f"http://{raw}", None
 
 def random_name() -> str:
     while True:
-        name = "".join(random.choices(CHARS, k=LENGTH))
+        name = "".join(random.choices(CHARS, k=3))
         if name not in generated:
             generated.add(name)
             return name
 
-async def check_one(session, name, retries=3):
-    url = "https://discord.com/api/v9/unique-username/username-attempt-unauthed"
-    for _ in range(retries):
-        proxy_url, proxy_auth = get_proxy()
-        try:
-            async with session.post(
-                url,
-                json={"username": name},
-                timeout=aiohttp.ClientTimeout(total=8),
-                proxy=proxy_url,
-                proxy_auth=proxy_auth
-            ) as r:
-                if r.status == 429:
-                    retry_after = float(r.headers.get("Retry-After", "2"))
-                    print(f"[!] Rate limit {retry_after}s")
-                    await asyncio.sleep(retry_after)
-                    continue
-                if r.status != 200:
-                    await asyncio.sleep(1)
-                    continue
-                data = await r.json()
-                taken = data.get("taken")
-                if taken is None:
-                    await asyncio.sleep(1)
-                    continue
-                return not taken
-        except:
-            await asyncio.sleep(0.5)
-    generated.discard(name)
-    return None
-
-async def send_webhook(name):
-    if not WEBHOOK_URL:
-        return
-    payload = {
-        "content": f"`{name}` is available ✅",
-        "username": "Username Finder"
-    }
+async def check_discord_available(name: str) -> bool:
+    url = f"https://discord.com/api/v9/unique-username/username-attempt-unauthed"
+    payload = {"username": name}
+    headers = {"Content-Type": "application/json"}
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(WEBHOOK_URL, json=payload) as r:
-                if r.status == 429:
-                    retry_after = float(r.headers.get("Retry-After", "2"))
-                    await asyncio.sleep(retry_after)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                data = await r.json()
+                return data.get("taken") == False
     except:
-        pass
+        return False
 
-async def worker(session):
-    global checked, found
+@tasks.loop(seconds=DELAY_SECONDS)
+async def generate_and_post():
+    channel = client.get_channel(CHANNEL_ID)
+    if channel is None:
+        return
+
     name = random_name()
-    result = await check_one(session, name)
-    checked += 1
-    if result:
-        found += 1
-        print(f"[✓] AVAILABLE: {name} | checked={checked} found={found}")
-        await send_webhook(name)
-    elif result is False:
-        print(f"[✗] taken: {name} | checked={checked}", end="\r")
+    available = await check_discord_available(name)
 
-async def main():
-    print(f"[*] Checker iniciado | length={LENGTH} threads={THREADS} proxies={len(proxy_list)}")
-    connector = aiohttp.TCPConnector(limit=THREADS * 2)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        while True:
-            tasks = [worker(session) for _ in range(THREADS)]
-            await asyncio.gather(*tasks)
-            await asyncio.sleep(DELAY)
+    if available:
+        embed = discord.Embed(
+            description=f"**`{name}`** is available ✅",
+            color=0x57F287,
+        )
+        embed.set_footer(text=f"Checked: {len(generated)}")
+        await channel.send(embed=embed)
+        print(f"[✓] Available: {name}")
+    else:
+        print(f"[✗] Taken: {name}")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+@client.event
+async def on_ready():
+    print(f"[BOT] Online as {client.user}")
+    channel = client.get_channel(CHANNEL_ID)
+    if channel:
+        await channel.send(embed=discord.Embed(
+            title="🔍 Username Checker iniciado",
+            description="Buscando usernames de 4 caracteres disponibles...",
+            color=0x5865F2,
+        ))
+    generate_and_post.start()
+
+client.run(TOKEN)
