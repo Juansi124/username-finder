@@ -62,7 +62,7 @@ async def on_ready():
     if channel:
         await channel.send(embed=discord.Embed(
             title="🔍 Username Checker iniciado",
-            description="Buscando usernames de 4 caracteres disponibles...",
+            description="Buscando usernames de 3c disponibles...",
             color=0x5865F2,
         ))
     generate_and_post.start()
