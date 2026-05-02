@@ -18,7 +18,7 @@ generated = set()
 
 def random_name() -> str:
     while True:
-        name = "".join(random.choices(CHARS, k=3))
+        name = "".join(random.choices(CHARS, k=4))
         if name not in generated:
             generated.add(name)
             return name
@@ -62,7 +62,7 @@ async def on_ready():
     if channel:
         await channel.send(embed=discord.Embed(
             title="🔍 Username Checker iniciado",
-            description="Buscando usernames de 3c disponibles...",
+            description="Buscando usernames de 4c/l disponibles...",
             color=0x5865F2,
         ))
     generate_and_post.start()
