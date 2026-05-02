@@ -8,6 +8,7 @@ from discord.ext import tasks
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
 CHANNEL_ID = int(os.environ.get("CHANNEL_ID", "0"))
+DELAY_SECONDS = float(os.environ.get("DELAY_SECONDS", "3"))
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
@@ -22,56 +23,26 @@ def random_name() -> str:
             generated.add(name)
             return name
 
-async def check_once(session, name) -> bool | None:
-    """
-    Retorna:
-      True  → disponible
-      False → tomado
-      None  → error/rate limit (no contar como tomado)
-    """
-    url = "https://discord.com/api/v9/unique-username/username-attempt-unauthed"
+async def check_discord_available(name: str) -> bool:
+    url = f"https://discord.com/api/v9/unique-username/username-attempt-unauthed"
+    payload = {"username": name}
+    headers = {"Content-Type": "application/json"}
     try:
-        async with session.post(
-            url,
-            json={"username": name},
-            headers={"Content-Type": "application/json"},
-            timeout=aiohttp.ClientTimeout(total=8)
-        ) as r:
-            if r.status == 429:
-                retry_after = float(r.headers.get("Retry-After", "5"))
-                print(f"[!] Rate limit — esperando {retry_after}s")
-                await asyncio.sleep(retry_after)
-                return None
-            if r.status != 200:
-                return None
-            data = await r.json()
-            taken = data.get("taken")
-            if taken is None:
-                return None
-            return not taken
-    except Exception as e:
-        print(f"[!] Error: {e}")
-        return None
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as r:
+                data = await r.json()
+                return data.get("taken") == False
+    except:
+        return False
 
-async def is_available(name: str) -> bool:
-    """Verifica dos veces — solo publica si ambas dicen disponible."""
-    async with aiohttp.ClientSession() as session:
-        first = await check_once(session, name)
-        if first is not True:
-            return False
-        # Segunda verificación con pausa
-        await asyncio.sleep(2)
-        second = await check_once(session, name)
-        return second is True
-
-@tasks.loop(seconds=4)
+@tasks.loop(seconds=DELAY_SECONDS)
 async def generate_and_post():
     channel = client.get_channel(CHANNEL_ID)
     if channel is None:
         return
 
     name = random_name()
-    available = await is_available(name)
+    available = await check_discord_available(name)
 
     if available:
         embed = discord.Embed(
@@ -80,9 +51,9 @@ async def generate_and_post():
         )
         embed.set_footer(text=f"Checked: {len(generated)}")
         await channel.send(embed=embed)
-        print(f"[✓] AVAILABLE: {name} | checked={len(generated)}")
+        print(f"[✓] Available: {name}")
     else:
-        print(f"[✗] taken: {name} | checked={len(generated)}", end="\r")
+        print(f"[✗] Taken: {name}")
 
 @client.event
 async def on_ready():
@@ -91,7 +62,7 @@ async def on_ready():
     if channel:
         await channel.send(embed=discord.Embed(
             title="🔍 Username Checker iniciado",
-            description="4c/4l iniciado",
+            description="Buscando usernames de 4c/l disponibles...",
             color=0x5865F2,
         ))
     generate_and_post.start()
