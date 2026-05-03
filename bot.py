@@ -18,7 +18,7 @@ generated = set()
 
 def random_name() -> str:
     while True:
-        name = "".join(random.choices(CHARS, k=3))
+        name = "".join(random.choices(CHARS, k=4))
         if name not in generated:
             generated.add(name)
             return name
